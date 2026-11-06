@@ -1,7 +1,7 @@
 """Model registry and persistence module for EPred.
 
-Responsible for bundling trained estimators, feature orders, scalers, and metadata,
-serializing them using Joblib, and providing robust deserialization for inference engines.
+Responsible for bundling trained estimators, multi-horizon heads, conformal quantile calibration,
+feature baselines for drift detection, serializing via Joblib, and providing deserialization.
 """
 
 import json
@@ -18,6 +18,7 @@ from src.config import (
     MODEL_METADATA_PATH,
     MODEL_VERSION,
     FORECAST_HORIZON_MINUTES,
+    SUPPORTED_HORIZONS_MINUTES,
     FEATURE_ORDER,
 )
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelArtifact:
-    """Encapsulates the complete trained model bundle required for inference."""
+    """Encapsulates the complete trained model bundle required for inference and diagnostics."""
 
     def __init__(
         self,
@@ -37,6 +38,10 @@ class ModelArtifact:
         test_metrics: Optional[Dict[str, float]] = None,
         model_version: str = MODEL_VERSION,
         forecast_horizon_minutes: int = FORECAST_HORIZON_MINUTES,
+        multi_horizon_estimators: Optional[Dict[str, BaseEstimator]] = None,
+        quantile_offsets: Optional[Dict[str, float]] = None,
+        spike_classifier: Optional[BaseEstimator] = None,
+        feature_baselines: Optional[Dict[str, Dict[str, float]]] = None,
         dataset_info: Optional[Dict[str, Any]] = None,
         training_timestamp: Optional[str] = None,
     ):
@@ -48,6 +53,10 @@ class ModelArtifact:
         self.val_metrics = val_metrics
         self.test_metrics = test_metrics or {}
         self.forecast_horizon_minutes = forecast_horizon_minutes
+        self.multi_horizon_estimators = multi_horizon_estimators or {}
+        self.quantile_offsets = quantile_offsets or {"p10_offset": -20.0, "p90_offset": 45.0}
+        self.spike_classifier = spike_classifier
+        self.feature_baselines = feature_baselines or {}
         self.dataset_info = dataset_info or {}
         self.training_timestamp = training_timestamp or datetime.now(timezone.utc).isoformat()
 
@@ -57,9 +66,13 @@ class ModelArtifact:
             "model_name": self.model_name,
             "model_version": self.model_version,
             "forecast_horizon_minutes": self.forecast_horizon_minutes,
+            "supported_horizons_minutes": SUPPORTED_HORIZONS_MINUTES,
             "training_timestamp": self.training_timestamp,
             "val_metrics": self.val_metrics,
             "test_metrics": self.test_metrics,
+            "conformal_quantile_offsets": self.quantile_offsets,
+            "has_spike_classifier": self.spike_classifier is not None,
+            "multi_horizon_heads": list(self.multi_horizon_estimators.keys()),
             "dataset_info": self.dataset_info,
             "num_features": len(self.feature_order),
             "feature_order": self.feature_order,
@@ -77,11 +90,9 @@ def save_model_artifact(
     model_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Serialize full artifact (estimator + scaler + features)
     joblib.dump(artifact, model_path)
     logger.info(f"Model artifact saved to {model_path}")
 
-    # Export metadata JSON
     metadata = artifact.to_metadata_dict()
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)

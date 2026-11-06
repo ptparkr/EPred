@@ -1,21 +1,21 @@
 # EPred — Energy Prediction System
 
-**EPred (Version 1.0)** is a modular, machine-learning-based energy forecasting engine designed to predict future electrical appliance energy consumption for the next 10-minute interval using historical energy measurements, indoor environmental parameters, and outdoor weather conditions.
+**EPred (Version 2.0)** is a modular, machine-learning-based energy forecasting engine designed to predict future electrical appliance energy consumption across multiple forecast horizons (10-minute, 30-minute, 60-minute) with conformal uncertainty bounds, spike surge risk classification, real-time telemetry streaming, and automated distribution drift diagnostics.
 
 ---
 
 ## 1. Project Introduction
-EPred is engineered as a reusable, testable machine learning library and prediction service. The primary objective is to build a reliable regression engine that forecasts episodic appliance energy demands without future-data leakage, providing high-precision inputs for future Home Energy Management Systems (HEMS), grid demand-response algorithms, and smart energy optimization systems.
+EPred is engineered as a reusable, testable machine learning library and prediction service. The primary objective is to build a reliable regression engine that forecasts episodic appliance energy demands without future-data leakage, providing high-precision inputs for Home Energy Management Systems (HEMS), battery storage scheduling, demand-response programs, and smart energy optimization systems.
 
 ---
 
 ## 2. Problem Statement
 Household electrical appliance consumption is highly intermittent, volatile, and episodic. Spikes occur when high-power devices (washing machines, dishwashers, electric ovens) activate, followed by prolonged periods of baseline idle consumption. 
 
-Forecasting consumption for the **next 10-minute interval** (`Appliances_Next_10min`) allows building automation systems to:
+Forecasting consumption across **10-minute, 30-minute, and 60-minute horizons** allows building automation systems to:
 - Schedule flexible loads during low-tariff or solar-peak periods.
-- Anticipate aggregate peak demand spikes.
-- Detect abnormal consumption anomalies.
+- Anticipate aggregate peak demand spikes and evaluate surge risks ($P_{90}$ upper bounds).
+- Detect abnormal consumption and sensor calibration drift in real time.
 
 > **Important Distinction**:
 > In this dataset, `Appliances` represents the electrical energy consumption of household appliances in Watt-hours (Wh). `lights` represents lighting fixtures energy consumption. `Appliances` does **not** represent total building electricity consumption.
@@ -52,19 +52,20 @@ The dataset contains **19,735 observations** logged at 10-minute intervals over 
 2. **Chronological Sorting**: Sort observations chronologically by `date`.
 3. **Timestamp Verification**: Confirmed that 100% of consecutive readings occur at exactly 10-minute intervals (19,734 regular intervals).
 4. **Outlier Investigation**: Appliance consumption contains intermittent high peaks (IQR upper bound 175 Wh, 99th percentile 576.6 Wh, maximum 1080 Wh). These observations represent genuine high-power appliance activations (e.g. laundry cycles, ovens). Deleting them would strip the model of the exact operational events it is designed to predict; hence, legitimate peaks are retained.
-5. **Target Generation**:
-   The forecasting target represents the appliance energy consumption in the next 10-minute interval:
-   $$\text{Target} = \text{Appliances}_{t+1}$$
-   Constructed in pandas via a negative single-step chronological shift:
+5. **Target Generation (Multi-Horizon)**:
+   The forecasting targets represent appliance energy consumption across multiple forward horizons:
+   $$\text{Target}_{10\mathrm{m}} = \text{Appliances}_{t+1}, \quad \text{Target}_{30\mathrm{m}} = \text{Appliances}_{t+3}, \quad \text{Target}_{60\mathrm{m}} = \text{Appliances}_{t+6}$$
+   Constructed in pandas via negative chronological shifts:
    ```python
    df["Appliances_Next_10min"] = df["Appliances"].shift(-1)
+   df["Appliances_Next_30min"] = df["Appliances"].shift(-3)
+   df["Appliances_Next_60min"] = df["Appliances"].shift(-6)
    ```
-   The final row (where shifted target is unavailable) is dropped.
-6. **Warmup Trimming**: The first 12 rows are dropped because 120-minute lags (`Appliances_Lag_12`) require 12 warmup steps. Total clean samples: **19,722 rows**.
+6. **Warmup & Terminal Trimming**: The first 12 rows are dropped because 120-minute lags require 12 warmup steps, and the final 6 rows are dropped because the 60-minute target is unavailable. Total clean samples: **19,717 rows**.
 7. **Chronological Train/Validation/Test Split**:
-   - Training Set (70%): Earliest 13,805 samples (Jan 11, 2016 – Apr 16, 2016)
+   - Training Set (70%): Earliest 13,801 samples (Jan 11, 2016 – Apr 16, 2016)
    - Validation Set (15%): Next 2,958 samples (Apr 16, 2016 – May 07, 2016)
-   - Testing Set (15%): Final 2,959 samples (May 07, 2016 – May 27, 2016)
+   - Testing Set (15%): Final 2,958 samples (May 07, 2016 – May 27, 2016)
 8. **Leakage Prevention**: All scalers and transformations are fitted **strictly on the Training set**.
 
 ---
@@ -92,60 +93,55 @@ Computed using only observations available at or before prediction time $t$:
 
 ---
 
-## 7. Algorithms Used
-EPred implements and benchmarks 4 supervised regression algorithms against a persistence baseline:
+## 7. Algorithms & V2 Architecture
 
 1. **Persistence Baseline**: Predicts the next interval using the most recently observed appliance reading ($y_{t+1} = y_t$).
-2. **Linear Regression** (`LinearRegression` with `StandardScaler`): Linear autoregressive multi-sensor mapping.
-3. **Decision Tree Regressor** (`DecisionTreeRegressor(max_depth=8, min_samples_split=20)`).
-4. **Random Forest Regressor** (`RandomForestRegressor(n_estimators=100, max_depth=16)`).
-5. **Gradient Boosting Regressor** (`GradientBoostingRegressor(n_estimators=120, max_depth=5, lr=0.08)`).
+2. **Primary Regressor (10-Minute)**: Linear Regression with `StandardScaler` (lowest validation RMSE).
+3. **Multi-Horizon Heads**: Dedicated forecasting heads for $t+30\text{min}$ and $t+60\text{min}$.
+4. **Conformal Quantile Calibration**: Empirical residual quantile calibration on validation data producing guaranteed coverage intervals:
+   $$[P_{10}, P_{50}, P_{90}] = [\max(0, \hat{y} + q_{0.10}), \; \hat{y}, \; \max(0, \hat{y} + q_{0.90})]$$
+5. **Appliance Spike Surge Classifier**: Logistic probability estimator predicting whether an appliance operational surge ($> 150\text{ Wh}$) will occur in the next interval.
+6. **In-Memory Telemetry Ring Buffer**: A circular FIFO buffer (`collections.deque(maxlen=12)`) in the prediction engine enabling client streaming with zero historical payload array required.
+7. **Automated Drift Detector**: Tracks live incoming sensor features against training baseline means and standard deviations, flagging distribution anomalies when $|z| > 3.0$.
 
 ---
 
 ## 8. Model Evaluation Results
 
-### Validation Benchmark Comparison
+### Validation Benchmark Comparison (10-Minute Horizon)
 
 | Model | Train MAE (Wh) | Train RMSE (Wh) | Train R² | Val MAE (Wh) | Val RMSE (Wh) | Val R² |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Persistence)** | 30.88 | 74.16 | 0.5175 | 26.14 | 66.44 | 0.4814 |
-| **Linear Regression (Selected)** | 31.87 | 67.11 | 0.6049 | **27.13** | **59.71** | **0.5812** |
-| **Decision Tree** | 26.80 | 57.86 | 0.7063 | 31.74 | 68.39 | 0.4505 |
-| **Random Forest** | 19.01 | 41.72 | 0.8473 | 32.10 | 63.56 | 0.5254 |
-| **Gradient Boosting** | 22.58 | 45.41 | 0.8191 | 43.20 | 83.40 | 0.1830 |
+| **Baseline (Persistence)** | 30.88 | 74.16 | 0.5175 | 26.14 | 66.45 | 0.4813 |
+| **Linear Regression (Selected)** | 31.87 | 67.11 | 0.6049 | **27.15** | **59.73** | **0.5810** |
+| **Decision Tree** | 26.80 | 57.86 | 0.7063 | 31.74 | 68.40 | 0.4504 |
+| **Random Forest** | 19.01 | 41.72 | 0.8473 | 32.16 | 63.44 | 0.5272 |
+| **Gradient Boosting** | 22.58 | 45.41 | 0.8191 | 55.71 | 103.07 | -0.2480 |
 
 ### Untouched Test Set Evaluation (Selected Model vs Baseline)
 
-| Metric | Persistence Baseline | Linear Regression (EPred V1) | Relative Improvement |
+| Metric | Persistence Baseline | Linear Regression (EPred V2) | Relative Improvement |
 | :--- | :---: | :---: | :---: |
-| **MAE** | 26.76 Wh | 27.76 Wh | Comparable |
-| **MSE** | 4470.19 Wh² | **3622.51 Wh²** | **-18.96%** |
-| **RMSE** | 66.86 Wh | **60.19 Wh** | **-9.98%** |
-| **R²** | 0.4590 | **0.5616** | **+22.35%** |
+| **MAE** | 26.76 Wh | 27.64 Wh | Comparable |
+| **MSE** | 4,470.19 Wh² | **3,599.19 Wh²** | **-19.48%** |
+| **RMSE** | 66.86 Wh | **59.99 Wh** | **-10.28%** |
+| **R²** | 0.4590 | **0.5603** | **+22.07%** |
 
-### Visual Artifacts
-Generated automatically in `reports/figures/`:
-- `actual_vs_predicted.png`: Scatter plot of actual vs predicted energy consumption.
-- `residual_distribution.png`: Histogram and KDE distribution of forecast residuals.
-- `error_over_time.png`: Temporal tracking of predicted consumption and absolute errors.
-- `feature_importance.png`: Standardized coefficient magnitudes demonstrating the dominant impact of recent lags and time-of-day features.
+### Multi-Horizon Validation Metrics
+- **10-minute horizon**: RMSE 59.73 Wh, R² 0.5810
+- **30-minute horizon**: RMSE 81.21 Wh, R² 0.2252
+- **60-minute horizon**: RMSE 84.05 Wh, R² 0.1696
 
 ---
 
 ## 9. Installation Instructions
 
-### Prerequisites
-- Python 3.10+ (tested on Python 3.11.9)
-- `pip` package manager
-
-### Setup
 ```bash
 # 1. Clone repository
 git clone <repo-url>
 cd EPred
 
-# 2. (Optional) Create virtual environment
+# 2. Setup virtual environment
 python -m venv .venv
 # On Windows:
 .venv\Scripts\activate
@@ -158,8 +154,8 @@ pip install -r requirements.txt
 
 ---
 
-## 10. Training Instructions
-To run data preprocessing, train all 4 models, compare against baseline, generate evaluation plots, and serialize the best model bundle:
+## 10. Training and Calibration Instructions
+To train all models, calibrate conformal quantile intervals, fit multi-horizon heads, train the spike classifier, and export metadata:
 
 ```bash
 python -m src.train
@@ -177,44 +173,51 @@ Outputs generated:
 ## 11. Prediction Instructions (Python Interface)
 
 ```python
-import pandas as pd
 from src.predict import get_prediction_engine
 
-# Initialize engine (loads serialized bundle once)
 engine = get_prediction_engine()
 
-# Example: Predict using raw sensor readings and 12 past intervals
+# Single prediction with raw measurements and 12 past intervals
 sample_raw = {
-    "date": "2016-05-20 14:00:00",
-    "Appliances": 60.0,
-    "lights": 10.0,
-    "T1": 21.2, "RH_1": 42.1,
-    "T2": 20.5, "RH_2": 41.0,
-    "T3": 21.0, "RH_3": 40.5,
-    "T4": 20.8, "RH_4": 41.2,
-    "T5": 19.5, "RH_5": 50.1,
-    "T6": 15.2, "RH_6": 60.5,
-    "T7": 19.8, "RH_7": 38.4,
-    "T8": 20.1, "RH_8": 43.2,
-    "T9": 19.2, "RH_9": 41.5,
-    "T_out": 14.5, "Press_mm_hg": 752.1, "RH_out": 65.0,
-    "Windspeed": 4.5, "Visibility": 40.0, "Tdewpoint": 8.0,
+    "Appliances": 60.0, "lights": 10.0,
+    "T1": 21.2, "RH_1": 42.1, "T2": 20.5, "RH_2": 41.0,
+    "T3": 21.0, "RH_3": 40.5, "T4": 20.8, "RH_4": 41.2,
+    "T5": 19.5, "RH_5": 50.1, "T6": 15.2, "RH_6": 60.5,
+    "T7": 19.8, "RH_7": 38.4, "T8": 20.1, "RH_8": 43.2,
+    "T9": 19.2, "RH_9": 41.5, "T_out": 14.5, "Press_mm_hg": 752.1,
+    "RH_out": 65.0, "Windspeed": 4.5, "Visibility": 40.0, "Tdewpoint": 8.0,
 }
-# Past 12 10-minute readings [t-12 to t-1]
 history = [50.0, 50.0, 60.0, 60.0, 50.0, 50.0, 60.0, 60.0, 70.0, 60.0, 60.0, 60.0]
 
 result = engine.predict(sample_raw, raw_mode=True, historical_appliances=history)
 print(result)
-# Output:
-# {
-#   'predicted_appliances_wh': 58.42,
-#   'unit': 'Wh',
-#   'forecast_horizon_minutes': 10,
-#   'prediction_timestamp': '2016-05-20T14:00:00',
-#   'model_version': '1.0.0',
-#   'model_name': 'Linear Regression',
-#   'status': 'success'
-# }
+```
+Output:
+```json
+{
+  "predicted_appliances_wh": 58.42,
+  "unit": "Wh",
+  "forecast_horizon_minutes": 10,
+  "prediction_timestamp": "2026-11-06T17:15:00",
+  "model_version": "2.0.0",
+  "model_name": "Linear Regression",
+  "confidence_intervals": {
+    "p10_wh": 26.16,
+    "p50_median_wh": 58.42,
+    "p90_wh": 78.90
+  },
+  "spike_risk": {
+    "probability": 0.082,
+    "risk_level": "low",
+    "spike_threshold_wh": 150.0
+  },
+  "multi_horizon_forecast": {
+    "10min": 58.42,
+    "30min": 64.12,
+    "60min": 68.35
+  },
+  "status": "success"
+}
 ```
 
 ---
@@ -225,72 +228,35 @@ print(result)
 ```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Interactive documentation is available at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+Interactive documentation: `http://localhost:8000/docs`
 
-### Endpoints
-
-#### 1. Health Check
+### Streaming Telemetry (`POST /telemetry`)
+IoT smart meters simply stream the current sensor reading without sending historical arrays:
 ```bash
-curl -X GET "http://localhost:8000/health"
+curl -X POST "http://localhost:8000/telemetry" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "Appliances": 60.0, "lights": 10.0,
+       "T1": 19.89, "RH_1": 47.59, "T2": 19.20, "RH_2": 44.79,
+       "T3": 19.79, "RH_3": 44.73, "T4": 19.00, "RH_4": 45.56,
+       "T5": 17.16, "RH_5": 55.20, "T6": 7.02,  "RH_6": 84.26,
+       "T7": 17.20, "RH_7": 41.62, "T8": 18.20, "RH_8": 48.90,
+       "T9": 17.03, "RH_9": 45.53, "T_out": 6.6, "Press_mm_hg": 733.5,
+       "RH_out": 92.0, "Windspeed": 7.0, "Visibility": 63.0, "Tdewpoint": 5.3
+     }'
+```
+
+### Data Drift Diagnostic (`GET /model/drift`)
+```bash
+curl -X GET "http://localhost:8000/model/drift"
 ```
 ```json
 {
-  "status": "healthy",
-  "model_loaded": true,
-  "model_name": "Linear Regression",
-  "model_version": "1.0.0"
+  "status": "normal",
+  "drifted_features_count": 0,
+  "total_features_checked": 48,
+  "details": {}
 }
-```
-
-#### 2. Model Metadata
-```bash
-curl -X GET "http://localhost:8000/model/info"
-```
-
-#### 3. Single Prediction (`POST /predict`)
-```bash
-curl -X POST "http://localhost:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "date": "2016-01-11 17:00:00",
-       "Appliances": 60.0,
-       "lights": 20.0,
-       "T1": 19.89, "RH_1": 47.59,
-       "T2": 19.20, "RH_2": 44.79,
-       "T3": 19.79, "RH_3": 44.73,
-       "T4": 19.00, "RH_4": 45.56,
-       "T5": 17.16, "RH_5": 55.20,
-       "T6": 7.02,  "RH_6": 84.26,
-       "T7": 17.20, "RH_7": 41.62,
-       "T8": 18.20, "RH_8": 48.90,
-       "T9": 17.03, "RH_9": 45.53,
-       "T_out": 6.6, "Press_mm_hg": 733.5, "RH_out": 92.0,
-       "Windspeed": 7.0, "Visibility": 63.0, "Tdewpoint": 5.3,
-       "historical_appliances": [60, 60, 50, 50, 60, 60, 50, 60, 50, 40, 50, 60]
-     }'
-```
-Response:
-```json
-{
-  "predicted_appliances_wh": 58.24,
-  "unit": "Wh",
-  "forecast_horizon_minutes": 10,
-  "prediction_timestamp": "2016-01-11 17:00:00",
-  "model_version": "1.0.0",
-  "model_name": "Linear Regression",
-  "status": "success"
-}
-```
-
-#### 4. Batch Prediction (`POST /predict/batch`)
-```bash
-curl -X POST "http://localhost:8000/predict/batch" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "observations": [ ...list of observations... ]
-     }'
 ```
 
 ---
@@ -304,16 +270,14 @@ curl -X POST "http://localhost:8000/predict/batch" \
 
 ## 14. Future Development Scope
 - **Appliance Disaggregation (NILM)**: Integrating Non-Intrusive Load Monitoring to separate individual device power signatures.
-- **Probabilistic Forecasting & Uncertainty Bounds**: Implementing quantile regression (e.g. Pinball loss) or conformal prediction to output 90% confidence bands ($[\hat{y}_{\mathrm{lower}}, \hat{y}_{\mathrm{upper}}]$) alongside point forecasts.
-- **Multi-step Horizon Expansion**: Extending forecasting from 10 minutes to 1-hour, 6-hour, and 24-hour day-ahead scheduling.
+- **Multi-step Horizon Expansion**: Extending forecasting from 1 hour to 6-hour, 12-hour, and 24-hour day-ahead scheduling.
 - **Edge Deployment**: Compiling the pipeline into ONNX or TinyML for direct deployment onto IoT smart meters and home gateway controllers.
 
 ---
 
 ## 15. Testing
-The project includes a complete test suite with 22 tests covering schema validation, feature engineering, chronological splits, leakage prevention, model loading, and API endpoints.
+The project includes a complete automated test suite with 24 tests covering schema validation, feature engineering, chronological splits, leakage prevention, multi-horizon heads, conformal quantile intervals, ring buffer streaming, and drift diagnostics:
 
-To run the automated tests:
 ```bash
 pytest -v
 ```

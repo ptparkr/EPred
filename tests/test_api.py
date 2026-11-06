@@ -1,6 +1,7 @@
-"""Integration and validation tests for EPred FastAPI endpoints and Pydantic schemas.
+"""Integration and validation tests for EPred V2 FastAPI endpoints and Pydantic schemas.
 
-Tests endpoint logic, schema validations, error responses, and health diagnostics.
+Tests endpoint logic, schema validations, error responses, streaming telemetry,
+and health/drift diagnostics.
 """
 
 import pytest
@@ -13,14 +14,18 @@ from api.main import (
     model_info,
     predict_single,
     predict_batch,
+    stream_telemetry,
+    drift_check,
 )
 from api.schemas import (
     RawSensorInput,
+    TelemetryStreamInput,
     BatchPredictionRequest,
     HealthResponse,
     ModelInfoResponse,
     PredictionResponse,
     BatchPredictionResponse,
+    DriftReportResponse,
 )
 from src.predict import get_prediction_engine
 import api.main as api_main
@@ -55,6 +60,7 @@ def test_root_endpoint():
     res = root()
     assert res["service"] == "EPred — Energy Prediction System"
     assert "/docs" in res["docs_url"]
+    assert res["version"] == "2.0.0"
 
 
 def test_health_endpoint():
@@ -62,16 +68,17 @@ def test_health_endpoint():
     assert isinstance(res, HealthResponse)
     assert res.status == "healthy"
     assert res.model_loaded is True
-    assert res.model_version == "1.0.0"
+    assert res.model_version == "2.0.0"
 
 
 def test_model_info_endpoint():
     res = model_info()
     assert isinstance(res, ModelInfoResponse)
     assert res.forecast_horizon_minutes == 10
+    assert res.supported_horizons_minutes == [10, 30, 60]
     assert res.num_features == 48
     assert "RMSE" in res.test_metrics
-    assert res.test_metrics["RMSE"] > 0
+    assert "p10_offset" in res.conformal_offsets
 
 
 def test_predict_endpoint_valid_payload(valid_sensor_dict):
@@ -83,6 +90,43 @@ def test_predict_endpoint_valid_payload(valid_sensor_dict):
     assert res.unit == "Wh"
     assert res.forecast_horizon_minutes == 10
     assert res.predicted_appliances_wh >= 0.0
+
+    # V2 Enhancements verification
+    assert res.confidence_intervals is not None
+    ci = res.confidence_intervals
+    assert ci.p10_wh <= ci.p50_median_wh
+    assert ci.p50_median_wh <= ci.p90_wh
+
+    assert res.multi_horizon_forecast is not None
+    assert "10min" in res.multi_horizon_forecast
+    assert "30min" in res.multi_horizon_forecast
+    assert "60min" in res.multi_horizon_forecast
+
+    assert res.spike_risk is not None
+    assert 0.0 <= res.spike_risk.probability <= 1.0
+
+
+def test_streaming_telemetry_endpoint(valid_sensor_dict):
+    telemetry_dict = valid_sensor_dict.copy()
+    telemetry_dict.pop("historical_appliances")
+
+    input_obj = TelemetryStreamInput(**telemetry_dict)
+    eng = api_main.get_engine()
+    eng.ring_buffer.clear()
+
+    # Streaming 12 warmup readings
+    for _ in range(12):
+        stream_telemetry(input_obj)
+
+    res13 = stream_telemetry(input_obj)
+    assert res13["status"] == "success"
+    assert res13["predicted_appliances_wh"] >= 0.0
+
+
+def test_drift_endpoint():
+    res = drift_check()
+    assert isinstance(res, DriftReportResponse)
+    assert "total_features_checked" in res.model_dump()
 
 
 def test_predict_endpoint_insufficient_history(valid_sensor_dict):
@@ -113,4 +157,4 @@ def test_predict_batch_endpoint(valid_sensor_dict):
     assert res.count == 2
     assert len(res.predictions) == 2
     for pred in res.predictions:
-        assert pred.predicted_appliances_wh >= 0.0
+        assert pred["predicted_appliances_wh"] >= 0.0

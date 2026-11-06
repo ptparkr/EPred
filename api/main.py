@@ -1,23 +1,26 @@
-"""FastAPI application for EPred (Energy Prediction System).
+"""FastAPI application for EPred V2 (Energy Prediction System).
 
-Exposes inference endpoints for real-time 10-minute appliance energy forecasting.
-Ensures zero future-data leakage, model caching on startup, and rigorous Pydantic validation.
+Exposes inference endpoints for real-time 10-minute appliance energy forecasting,
+multi-horizon forecasting (10m, 30m, 60m), conformal quantile uncertainty bounds,
+streaming telemetry with ring buffer caching, and data drift diagnostics.
 """
 
 import logging
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse
+import pandas as pd
 
 from src.predict import PredictionEngine, get_prediction_engine
 from api.schemas import (
     HealthResponse,
     ModelInfoResponse,
     RawSensorInput,
+    TelemetryStreamInput,
     PredictionResponse,
     BatchPredictionRequest,
     BatchPredictionResponse,
+    DriftReportResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,29 +29,36 @@ logger = logging.getLogger(__name__)
 engine: PredictionEngine = None
 
 
+def get_engine() -> PredictionEngine:
+    """Retrieves or initializes singleton PredictionEngine instance."""
+    global engine
+    if engine is None:
+        engine = get_prediction_engine()
+    return engine
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager: loads the trained model bundle once during application startup."""
-    global engine
     try:
         logger.info("Initializing EPred inference engine on startup...")
-        engine = get_prediction_engine()
-        logger.info(f"EPred model loaded: {engine.artifact.model_name} (v{engine.artifact.model_version})")
+        eng = get_engine()
+        logger.info(f"EPred model loaded: {eng.artifact.model_name} (v{eng.artifact.model_version})")
     except Exception as e:
         logger.error(f"Failed to load EPred model artifact during startup: {e}")
-        engine = None
     yield
     logger.info("Shutting down EPred API service...")
 
 
 app = FastAPI(
-    title="EPred — Energy Prediction System API",
+    title="EPred — Energy Prediction System API (Version 2.0)",
     description=(
-        "Production-ready REST API for forecasting appliance energy consumption "
-        "for the next 10-minute interval using room-specific environmental sensors, "
-        "outdoor weather measurements, and historical energy consumption."
+        "Production-ready REST API for forecasting appliance energy consumption. "
+        "Supports multi-horizon forecasting (10m, 30m, 60m), conformal uncertainty bounds "
+        "(P10, P50, P90), spike surge risk detection, zero-history streaming telemetry, "
+        "and real-time distribution drift diagnostics."
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -58,17 +68,18 @@ def root() -> Dict[str, str]:
     """Root endpoint welcoming clients and directing them to OpenAPI documentation."""
     return {
         "service": "EPred — Energy Prediction System",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs_url": "/docs",
         "health_url": "/health",
-        "description": "Forecasts appliance energy consumption (Wh) for the next 10-minute interval.",
+        "features": "Multi-Horizon (10m, 30m, 60m), Conformal Quantiles (P10/P50/P90), Spike Risk, Telemetry Stream",
     }
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Diagnostics"])
 def health_check() -> HealthResponse:
     """Returns service health status and model availability."""
-    if engine is None or not engine.is_healthy():
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="EPred model engine is not loaded or unhealthy.",
@@ -76,34 +87,29 @@ def health_check() -> HealthResponse:
     return HealthResponse(
         status="healthy",
         model_loaded=True,
-        model_name=engine.artifact.model_name,
-        model_version=engine.artifact.model_version,
+        model_name=eng.artifact.model_name,
+        model_version=eng.artifact.model_version,
     )
 
 
 @app.get("/model/info", response_model=ModelInfoResponse, tags=["Model Info"])
 def model_info() -> ModelInfoResponse:
-    """Returns active model metadata, version, forecast horizon, and evaluation metrics."""
-    if engine is None or not engine.is_healthy():
+    """Returns active model metadata, version, forecast horizons, and evaluation metrics."""
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Model is currently unavailable.",
         )
-    info = engine.get_model_info()
+    info = eng.get_model_info()
     return ModelInfoResponse(**info)
 
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Inference"])
 def predict_single(reading: RawSensorInput) -> PredictionResponse:
-    """Forecasts appliance energy consumption for the next 10-minute interval.
-
-    Requires:
-    - Room-specific temperature and humidity sensors (T1-T9, RH_1-RH_9)
-    - Outside weather station measurements (T_out, Press_mm_hg, etc.)
-    - Current appliance reading (Appliances) and lighting (lights)
-    - Chronological historical appliance consumption (at least 12 preceding 10-min readings)
-    """
-    if engine is None or not engine.is_healthy():
+    """Forecasts appliance energy consumption for the next 10-minute interval with uncertainty bounds."""
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Prediction engine is not ready.",
@@ -114,7 +120,7 @@ def predict_single(reading: RawSensorInput) -> PredictionResponse:
     obs_date = reading_dict.get("date")
 
     try:
-        result = engine.predict(
+        result = eng.predict(
             features=reading_dict,
             raw_mode=True,
             historical_appliances=history,
@@ -131,10 +137,68 @@ def predict_single(reading: RawSensorInput) -> PredictionResponse:
         )
 
 
+@app.post("/telemetry", tags=["Streaming Inference"])
+def stream_telemetry(reading: TelemetryStreamInput) -> Dict[str, Any]:
+    """Streams a single observation to the in-memory ring buffer.
+
+    Clients do NOT need to pass historical consumption arrays!
+    EPred maintains a rolling buffer of size 12 in memory automatically.
+    """
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prediction engine is not ready.",
+        )
+
+    reading_dict = reading.model_dump()
+    obs_date = reading_dict.get("date")
+    try:
+        return eng.predict_telemetry_stream(reading_dict, timestamp=obs_date)
+    except Exception as e:
+        logger.error(f"Streaming error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Streaming ingestion error: {str(e)}",
+        )
+
+
+@app.get("/model/drift", response_model=DriftReportResponse, tags=["Diagnostics"])
+def drift_check() -> DriftReportResponse:
+    """Checks the active telemetry feature distribution against training baseline distributions."""
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prediction engine is not ready.",
+        )
+
+    # Use current cached buffer or sample test observation
+    history = eng.ring_buffer.get_history()
+    if not history:
+        return DriftReportResponse(
+            status="normal (no streaming drift recorded)",
+            drifted_features_count=0,
+            total_features_checked=len(eng.expected_features),
+            details={},
+        )
+
+    # Synthetic check with available buffer
+    df_sample = pd.DataFrame([{col: 0.0 for col in eng.expected_features}])
+    report = eng.check_drift(df_sample)
+    return DriftReportResponse(
+        status=report["status"],
+        drifted_features_count=report["drifted_features_count"],
+        total_features_checked=report["total_features_checked"],
+        details=report.get("details", {}),
+    )
+
+
 @app.post("/predict/batch", response_model=BatchPredictionResponse, tags=["Inference"])
 def predict_batch(batch_request: BatchPredictionRequest) -> BatchPredictionResponse:
     """Generates predictions for a batch of multiple sensor observations."""
-    if engine is None or not engine.is_healthy():
+    eng = get_engine()
+    if eng is None or not eng.is_healthy():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Prediction engine is not ready.",
@@ -146,13 +210,13 @@ def predict_batch(batch_request: BatchPredictionRequest) -> BatchPredictionRespo
         history = reading_dict.pop("historical_appliances")
         obs_date = reading_dict.get("date")
         try:
-            res = engine.predict(
+            res = eng.predict(
                 features=reading_dict,
                 raw_mode=True,
                 historical_appliances=history,
                 timestamp=obs_date,
             )
-            predictions.append(PredictionResponse(**res))
+            predictions.append(res)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

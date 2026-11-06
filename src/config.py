@@ -26,9 +26,18 @@ TRAIN_RATIO = 0.70
 VAL_RATIO = 0.15
 TEST_RATIO = 0.15
 
-# Target Definition
-TARGET_COL = "Appliances_Next_10min"
+# Multi-Horizon Target Definitions
+TARGET_COL = "Appliances_Next_10min"          # 10 minutes (t+1)
+TARGET_COL_30MIN = "Appliances_Next_30min"    # 30 minutes (t+3)
+TARGET_COL_60MIN = "Appliances_Next_60min"    # 60 minutes (t+6)
+ALL_TARGET_COLS = [TARGET_COL, TARGET_COL_30MIN, TARGET_COL_60MIN]
 BASE_TARGET_COL = "Appliances"
+
+# Spike Classification Threshold
+SPIKE_THRESHOLD_WH = 150.0
+
+# Telemetry Ring Buffer Size
+TELEMETRY_BUFFER_SIZE = 12
 
 # Original Raw Columns
 REQUIRED_RAW_COLUMNS = [
@@ -94,4 +103,5 @@ RANDOM_STATE = 42
 
 # Forecast Horizon
 FORECAST_HORIZON_MINUTES = 10
-MODEL_VERSION = "1.0.0"
+SUPPORTED_HORIZONS_MINUTES = [10, 30, 60]
+MODEL_VERSION = "2.0.0"

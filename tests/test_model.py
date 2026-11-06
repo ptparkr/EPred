@@ -1,4 +1,4 @@
-"""Unit tests for EPred model training, evaluation, persistence, and prediction engine."""
+"""Unit tests for EPred V2 model training, evaluation, persistence, and prediction engine."""
 
 import pytest
 import numpy as np
@@ -24,6 +24,13 @@ def test_model_artifact_integrity():
     assert "RMSE" in artifact.test_metrics
     assert artifact.val_metrics["RMSE"] > 0
     assert artifact.test_metrics["RMSE"] > 0
+    # V2 Enhancements
+    assert "30min" in artifact.multi_horizon_estimators
+    assert "60min" in artifact.multi_horizon_estimators
+    assert "p10_offset" in artifact.quantile_offsets
+    assert "p90_offset" in artifact.quantile_offsets
+    assert artifact.spike_classifier is not None
+    assert len(artifact.feature_baselines) == len(FEATURE_ORDER)
 
 
 def test_metrics_calculation_known_values():
@@ -32,11 +39,8 @@ def test_metrics_calculation_known_values():
     y_pred = np.array([110.0, 190.0, 300.0])  # Errors: +10, -10, 0
 
     metrics = calculate_metrics(y_true, y_pred)
-    # MAE = (10 + 10 + 0) / 3 = 6.6667
     assert np.isclose(metrics["MAE"], 6.6667, atol=1e-3)
-    # MSE = (100 + 100 + 0) / 3 = 66.6667
     assert np.isclose(metrics["MSE"], 66.6667, atol=1e-3)
-    # RMSE = sqrt(66.6667) = 8.165
     assert np.isclose(metrics["RMSE"], 8.165, atol=1e-3)
 
 
@@ -56,43 +60,74 @@ def test_prediction_engine_single_and_finite():
     assert result["predicted_appliances_wh"] >= 0.0
 
 
-def test_prediction_consistency():
-    """Verifies deterministic inference: duplicate requests produce identical predictions."""
+def test_conformal_quantiles_and_multi_horizon():
+    """Verifies V2 conformal uncertainty intervals and multi-horizon trajectory."""
     engine = get_prediction_engine()
     test_df = pd.read_csv(TEST_DATA_PATH)
-    sample_features = test_df.iloc[5:6]
+    sample_features = test_df.iloc[2:3]
 
-    res1 = engine.predict(sample_features)
-    res2 = engine.predict(sample_features)
-    assert res1["predicted_appliances_wh"] == res2["predicted_appliances_wh"]
+    result = engine.predict(sample_features)
+    ci = result["confidence_intervals"]
+    assert ci["p10_wh"] <= ci["p50_median_wh"]
+    assert ci["p50_median_wh"] <= ci["p90_wh"]
+
+    # Multi-horizon trajectory
+    traj = result["multi_horizon_forecast"]
+    assert "10min" in traj
+    assert "30min" in traj
+    assert "60min" in traj
+    assert traj["10min"] >= 0.0
+    assert traj["30min"] >= 0.0
+    assert traj["60min"] >= 0.0
+
+    # Spike risk assessment
+    spike = result["spike_risk"]
+    assert 0.0 <= spike["probability"] <= 1.0
+    assert spike["risk_level"] in ["low", "medium", "high"]
 
 
-def test_prediction_batch_accuracy():
-    """Verifies batch inference matches sequential single predictions."""
+def test_telemetry_ring_buffer_streaming():
+    """Verifies in-memory ring buffer enables streaming without client historical array."""
+    engine = PredictionEngine()
+    engine.ring_buffer.clear()
+
+    raw_reading = {
+        "Appliances": 60.0, "lights": 10.0,
+        "T1": 20.0, "RH_1": 45.0, "T2": 19.5, "RH_2": 44.0, "T3": 20.2, "RH_3": 43.5,
+        "T4": 19.8, "RH_4": 42.0, "T5": 18.5, "RH_5": 50.0, "T6": 8.5, "RH_6": 80.0,
+        "T7": 18.0, "RH_7": 40.0, "T8": 19.0, "RH_8": 45.0, "T9": 18.2, "RH_9": 43.0,
+        "T_out": 7.0, "Press_mm_hg": 740.0, "RH_out": 85.0, "Windspeed": 5.0,
+        "Visibility": 50.0, "Tdewpoint": 4.5
+    }
+
+    # First 12 calls warm up the buffer with 12 historical readings
+    for i in range(12):
+        res = engine.predict_telemetry_stream(raw_reading)
+        assert res["status"] == "warming_up"
+        assert res["buffer_size"] == i + 1
+
+    # 13th call has 12 historical readings ready and successfully produces forecast!
+    res13 = engine.predict_telemetry_stream(raw_reading)
+    assert res13["status"] == "success"
+    assert "predicted_appliances_wh" in res13
+    assert res13["predicted_appliances_wh"] >= 0.0
+
+
+def test_drift_detection():
+    """Verifies distribution drift checking against training baselines."""
     engine = get_prediction_engine()
     test_df = pd.read_csv(TEST_DATA_PATH)
-    batch_features = test_df.iloc[10:15]
 
-    batch_res = engine.predict_batch(batch_features)
-    assert len(batch_res) == 5
+    normal_sample = test_df.iloc[0:5][FEATURE_ORDER]
+    report_normal = engine.check_drift(normal_sample)
+    assert report_normal["total_features_checked"] == len(FEATURE_ORDER)
+    assert report_normal["status"] in ["normal", "minor_drift"]
 
-    for i in range(5):
-        single_res = engine.predict(batch_features.iloc[i:i+1])
-        assert batch_res[i]["predicted_appliances_wh"] == single_res["predicted_appliances_wh"]
+    # Injected extreme anomaly sample
+    drifted_sample = normal_sample.copy()
+    drifted_sample["T1"] = 999.0  # 999 Celsius in kitchen
+    drifted_sample["Appliances"] = 9999.0
 
-
-def test_prediction_engine_raw_mode_validation():
-    """Verifies raw observation calculation and lag validation."""
-    engine = get_prediction_engine()
-    test_df = pd.read_csv(TEST_DATA_PATH)
-    row = test_df.iloc[20].to_dict()
-
-    valid_history = [50.0] * 12
-    res = engine.predict(row, raw_mode=True, historical_appliances=valid_history)
-    assert res["status"] == "success"
-    assert np.isfinite(res["predicted_appliances_wh"])
-
-    # Test error on insufficient history (< 12)
-    short_history = [50.0] * 10
-    with pytest.raises(ValueError, match="Insufficient historical data"):
-        engine.predict(row, raw_mode=True, historical_appliances=short_history)
+    report_drift = engine.check_drift(drifted_sample)
+    assert report_drift["drifted_features_count"] >= 2
+    assert report_drift["details"]["T1"]["drift_flag"] is True

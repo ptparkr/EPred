@@ -1,7 +1,7 @@
 """Data preprocessing module for EPred.
 
-Performs data cleaning, outlier diagnostics, target generation, feature preparation,
-chronological train/val/test splitting, and fitting preprocessing scalers on training data only.
+Performs data cleaning, outlier diagnostics, target generation (single and multi-horizon),
+feature preparation, chronological train/val/test splitting, and fitting preprocessing scalers on training data only.
 """
 
 import logging
@@ -19,11 +19,14 @@ from src.config import (
     TEST_DATA_PATH,
     COLUMNS_TO_DROP,
     TARGET_COL,
+    TARGET_COL_30MIN,
+    TARGET_COL_60MIN,
+    ALL_TARGET_COLS,
     BASE_TARGET_COL,
     FEATURE_ORDER,
     TRAIN_RATIO,
     VAL_RATIO,
-    TEST_RATIO
+    TEST_RATIO,
 )
 from src.data_loader import DataLoader
 from src.feature_engineering import generate_all_features
@@ -78,12 +81,14 @@ class PreprocessingPipeline:
         return outlier_summary
 
     def prepare_dataset(self) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """Executes full data loading, feature engineering, and target creation.
+        """Executes full data loading, feature engineering, and multi-horizon target creation.
 
-        Target generation:
-            Appliances_Next_10min = Appliances.shift(-1)
-        Final row with NaN target is dropped.
-        Warmup rows where lags are NaN (first 12 rows) are dropped.
+        Multi-horizon target generation:
+            Appliances_Next_10min = Appliances.shift(-1)  (t + 10 min)
+            Appliances_Next_30min = Appliances.shift(-3)  (t + 30 min)
+            Appliances_Next_60min = Appliances.shift(-6)  (t + 60 min)
+        Warmup rows (first 12) where Appliances_Lag_12 is NaN and terminal rows (final 6)
+        where 60-min target is unavailable are trimmed cleanly.
         """
         df = self.data_loader.load_data()
         inspection_report = self.data_loader.inspect_data(df)
@@ -97,22 +102,24 @@ class PreprocessingPipeline:
         # Generate all features
         df = generate_all_features(df)
 
-        # Generate forecasting target: Appliances in next 10-minute interval
+        # Generate multi-horizon forecasting targets
         df[TARGET_COL] = df[BASE_TARGET_COL].shift(-1)
+        df[TARGET_COL_30MIN] = df[BASE_TARGET_COL].shift(-3)
+        df[TARGET_COL_60MIN] = df[BASE_TARGET_COL].shift(-6)
 
-        # Exclude final row where shifted target is NaN
-        # and warmup rows (first 12) where Appliances_Lag_12 is NaN
+        # Exclude rows where targets or features have NaNs
         initial_len = len(df)
-        df = df.dropna(subset=[TARGET_COL] + FEATURE_ORDER).reset_index(drop=True)
+        df = df.dropna(subset=ALL_TARGET_COLS + FEATURE_ORDER).reset_index(drop=True)
         dropped_rows = initial_len - len(df)
-        logger.info(f"Dropped {dropped_rows} rows (12 lag warmup rows + 1 final target row). Total ready: {len(df)}")
+        logger.info(f"Dropped {dropped_rows} rows (12 lag warmup rows + 6 terminal target rows). Total ready: {len(df)}")
 
         metadata = {
             "inspection": inspection_report,
             "outliers": outlier_report,
             "final_rows": len(df),
             "feature_count": len(FEATURE_ORDER),
-            "target_column": TARGET_COL
+            "target_columns": ALL_TARGET_COLS,
+            "primary_target": TARGET_COL,
         }
 
         return df, metadata

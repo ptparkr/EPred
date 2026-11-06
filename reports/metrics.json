@@ -1,79 +1,97 @@
 {
   "selected_model": "Linear Regression",
   "validation_metrics": {
-    "MAE": 27.131,
-    "MSE": 3565.7174,
-    "RMSE": 59.7136,
-    "R2": 0.5812
+    "MAE": 27.1537,
+    "MSE": 3567.1071,
+    "RMSE": 59.7253,
+    "R2": 0.581
   },
   "test_metrics": {
-    "MAE": 27.7637,
-    "MSE": 3622.508,
-    "RMSE": 60.1873,
-    "R2": 0.5616
+    "MAE": 27.6402,
+    "MSE": 3599.1909,
+    "RMSE": 59.9933,
+    "R2": 0.5603
   },
   "baseline_val_metrics": {
-    "MAE": 26.1427,
-    "MSE": 4414.5707,
-    "RMSE": 66.4422,
-    "R2": 0.4814
+    "MAE": 26.1663,
+    "MSE": 4415.6187,
+    "RMSE": 66.4501,
+    "R2": 0.4813
   },
   "baseline_test_metrics": {
-    "MAE": 26.7557,
-    "MSE": 4470.1926,
-    "RMSE": 66.8595,
-    "R2": 0.459
+    "MAE": 26.6565,
+    "MSE": 4453.313,
+    "RMSE": 66.7331,
+    "R2": 0.4559
+  },
+  "multi_horizon_val_metrics": {
+    "30min": {
+      "MAE": 40.8514,
+      "MSE": 6595.7366,
+      "RMSE": 81.2141,
+      "R2": 0.2252
+    },
+    "60min": {
+      "MAE": 45.2121,
+      "MSE": 7064.6081,
+      "RMSE": 84.0512,
+      "R2": 0.1696
+    }
+  },
+  "conformal_quantile_offsets": {
+    "p10_offset": -32.26,
+    "p90_offset": 20.48
   },
   "model_comparison": [
     {
       "Model": "Baseline (Persistence)",
-      "Train_MAE": 30.8772,
-      "Train_RMSE": 74.1571,
+      "Train_MAE": 30.8782,
+      "Train_RMSE": 74.166,
       "Train_R2": 0.5175,
-      "Val_MAE": 26.1427,
-      "Val_MSE": 4414.5707,
-      "Val_RMSE": 66.4422,
-      "Val_R2": 0.4814
+      "Val_MAE": 26.1663,
+      "Val_MSE": 4415.6187,
+      "Val_RMSE": 66.4501,
+      "Val_R2": 0.4813
     },
     {
       "Model": "Linear Regression",
-      "Train_MAE": 31.8724,
-      "Train_RMSE": 67.109,
+      "Train_MAE": 31.8793,
+      "Train_RMSE": 67.1161,
       "Train_R2": 0.6049,
-      "Val_MAE": 27.131,
-      "Val_MSE": 3565.7174,
-      "Val_RMSE": 59.7136,
-      "Val_R2": 0.5812
+      "Val_MAE": 27.1537,
+      "Val_MSE": 3567.1071,
+      "Val_RMSE": 59.7253,
+      "Val_R2": 0.581
     },
     {
       "Model": "Decision Tree",
-      "Train_MAE": 26.8025,
-      "Train_RMSE": 57.8592,
+      "Train_MAE": 26.8082,
+      "Train_RMSE": 57.8665,
       "Train_R2": 0.7063,
-      "Val_MAE": 31.7352,
-      "Val_MSE": 4677.6609,
-      "Val_RMSE": 68.3934,
-      "Val_R2": 0.4505
+      "Val_MAE": 31.7407,
+      "Val_MSE": 4678.1272,
+      "Val_RMSE": 68.3968,
+      "Val_R2": 0.4504
     },
     {
       "Model": "Random Forest",
-      "Train_MAE": 19.005,
-      "Train_RMSE": 41.7183,
-      "Train_R2": 0.8473,
-      "Val_MAE": 32.0978,
-      "Val_MSE": 4040.0835,
-      "Val_RMSE": 63.5617,
-      "Val_R2": 0.5254
+      "Train_MAE": 19.0362,
+      "Train_RMSE": 41.7889,
+      "Train_R2": 0.8468,
+      "Val_MAE": 32.1565,
+      "Val_MSE": 4025.0832,
+      "Val_RMSE": 63.4435,
+      "Val_R2": 0.5272
     },
     {
       "Model": "Gradient Boosting",
-      "Train_MAE": 22.5782,
-      "Train_RMSE": 45.4069,
-      "Train_R2": 0.8191,
-      "Val_MAE": 43.2043,
-      "Val_MSE": 6955.0797,
-      "Val_RMSE": 83.3971,
-      "Val_R2": 0.183
+      "Train_MAE": 22.7567,
+      "Train_RMSE": 45.8171,
+      "Train_R2": 0.8159,
+      "Val_MAE": 55.713,
+      "Val_MSE": 10623.957,
+      "Val_RMSE": 103.0726,
+      "Val_R2": -0.248
     }
   ]
 }
