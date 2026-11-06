@@ -1,0 +1,99 @@
+{
+  "model_name": "Linear Regression",
+  "model_version": "1.0.0",
+  "forecast_horizon_minutes": 10,
+  "training_timestamp": "2026-11-06T16:43:46.141077+00:00",
+  "val_metrics": {
+    "MAE": 27.131,
+    "MSE": 3565.7174,
+    "RMSE": 59.7136,
+    "R2": 0.5812
+  },
+  "test_metrics": {
+    "MAE": 27.7637,
+    "MSE": 3622.508,
+    "RMSE": 60.1873,
+    "R2": 0.5616
+  },
+  "dataset_info": {
+    "train_samples": 13805,
+    "val_samples": 2958,
+    "test_samples": 2959,
+    "total_samples": 19722,
+    "train_date_range": [
+      "2016-01-11 19:00:00",
+      "2016-04-16 15:40:00"
+    ],
+    "val_date_range": [
+      "2016-04-16 15:50:00",
+      "2016-05-07 04:40:00"
+    ],
+    "test_date_range": [
+      "2016-05-07 04:50:00",
+      "2016-05-27 17:50:00"
+    ],
+    "baseline_val_metrics": {
+      "MAE": 26.1427,
+      "MSE": 4414.5707,
+      "RMSE": 66.4422,
+      "R2": 0.4814
+    },
+    "baseline_test_metrics": {
+      "MAE": 26.7557,
+      "MSE": 4470.1926,
+      "RMSE": 66.8595,
+      "R2": 0.459
+    }
+  },
+  "num_features": 48,
+  "feature_order": [
+    "Appliances",
+    "lights",
+    "T1",
+    "RH_1",
+    "T2",
+    "RH_2",
+    "T3",
+    "RH_3",
+    "T4",
+    "RH_4",
+    "T5",
+    "RH_5",
+    "T6",
+    "RH_6",
+    "T7",
+    "RH_7",
+    "T8",
+    "RH_8",
+    "T9",
+    "RH_9",
+    "T_out",
+    "Press_mm_hg",
+    "RH_out",
+    "Windspeed",
+    "Visibility",
+    "Tdewpoint",
+    "Hour",
+    "Minute",
+    "Day_of_Week",
+    "Is_Weekend",
+    "Month",
+    "Hour_Sin",
+    "Hour_Cos",
+    "Weekday_Sin",
+    "Weekday_Cos",
+    "Appliances_Lag_1",
+    "Appliances_Lag_2",
+    "Appliances_Lag_3",
+    "Appliances_Lag_6",
+    "Appliances_Lag_12",
+    "Appliances_Rolling_Mean_3",
+    "Appliances_Rolling_Mean_6",
+    "Appliances_Rolling_Mean_12",
+    "Appliances_Rolling_Std_6",
+    "Avg_Indoor_Temp",
+    "Avg_Indoor_Humidity",
+    "Temp_Difference",
+    "Humidity_Difference"
+  ]
+}

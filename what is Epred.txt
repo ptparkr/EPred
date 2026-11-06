@@ -1,0 +1,17 @@
+# EPred
+
+**EPred (Energy Predictor )** is a machine-learning-based project focused on forecasting electrical energy consumption using historical energy measurements and environmental parameters.
+
+The project aims to analyse electricity consumption patterns, understand the influence of environmental factors on energy usage, and develop predictive models capable of estimating future appliance energy consumption.
+
+Using real-world energy consumption data, EPred applies data preprocessing, exploratory data analysis, feature engineering and supervised machine learning techniques to develop and evaluate regression models.
+
+The initial implementation focuses on comparing Linear Regression, Decision Tree Regression, Random Forest Regression and Gradient Boosting Regression to identify an effective predictive model.
+
+The long-term vision of EPred is to evolve into an intelligent energy management system capable of real-time energy monitoring, consumption forecasting, abnormal usage detection and energy optimization.
+
+**Primary Objective:** To develop a reliable machine learning model that predicts electrical energy consumption and provides insights into energy usage behaviour.
+
+**Initial Scope:** Dataset analysis, preprocessing, regression model development, prediction and performance evaluation.
+
+**Future Scope:** Integration with IoT sensors, real-time monitoring, energy optimization and intelligent energy management.
