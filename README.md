@@ -138,7 +138,7 @@ Computed using only observations available at or before prediction time $t$:
 
 ```bash
 # 1. Clone repository
-git clone <repo-url>
+git clone <https://github.com/ptparkr/EPred>
 cd EPred
 
 # 2. Setup virtual environment
