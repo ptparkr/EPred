@@ -53,7 +53,12 @@ The dataset contains **19,735 observations** logged at 10-minute intervals over 
 3. **Timestamp Verification**: Confirmed that 100% of consecutive readings occur at exactly 10-minute intervals (19,734 regular intervals).
 4. **Outlier Investigation**: Appliance consumption contains intermittent high peaks (IQR upper bound 175 Wh, 99th percentile 576.6 Wh, maximum 1080 Wh). These observations represent genuine high-power appliance activations (e.g. laundry cycles, ovens). Deleting them would strip the model of the exact operational events it is designed to predict; hence, legitimate peaks are retained.
 5. **Target Generation**:
-   $$\text{Appliances\_Next\_10min} = \text{Appliances.shift}(-1)$$
+   The forecasting target represents the appliance energy consumption in the next 10-minute interval:
+   $$\text{Target} = \text{Appliances}_{t+1}$$
+   Constructed in pandas via a negative single-step chronological shift:
+   ```python
+   df["Appliances_Next_10min"] = df["Appliances"].shift(-1)
+   ```
    The final row (where shifted target is unavailable) is dropped.
 6. **Warmup Trimming**: The first 12 rows are dropped because 120-minute lags (`Appliances_Lag_12`) require 12 warmup steps. Total clean samples: **19,722 rows**.
 7. **Chronological Train/Validation/Test Split**:
@@ -69,10 +74,10 @@ A total of **48 features** are computed deterministically:
 
 ### A. Time Features
 - `Hour`, `Minute`, `Day_of_Week`, `Is_Weekend`, `Month`
-- Cyclical 24-hour encoding:
-  $$\text{Hour\_Sin} = \sin\left(\frac{2\pi \cdot (\text{Hour} + \text{Minute}/60)}{24}\right), \quad \text{Hour\_Cos} = \cos\left(\frac{2\pi \cdot (\text{Hour} + \text{Minute}/60)}{24}\right)$$
-- Cyclical weekly encoding:
-  $$\text{Weekday\_Sin} = \sin\left(\frac{2\pi \cdot \text{Day\_of\_Week}}{7}\right), \quad \text{Weekday\_Cos} = \cos\left(\frac{2\pi \cdot \text{Day\_of\_Week}}{7}\right)$$
+- Cyclical 24-hour encoding (`Hour_Sin`, `Hour_Cos`):
+  $$\text{Hour}_{\sin} = \sin\left(\frac{2\pi \cdot (\text{Hour} + \text{Minute}/60)}{24}\right), \quad \text{Hour}_{\cos} = \cos\left(\frac{2\pi \cdot (\text{Hour} + \text{Minute}/60)}{24}\right)$$
+- Cyclical weekly encoding (`Weekday_Sin`, `Weekday_Cos`):
+  $$\text{Weekday}_{\sin} = \sin\left(\frac{2\pi \cdot \text{DayOfWeek}}{7}\right), \quad \text{Weekday}_{\cos} = \cos\left(\frac{2\pi \cdot \text{DayOfWeek}}{7}\right)$$
 
 ### B. Historical Energy Lags and Rolling Windows
 Computed using only observations available at or before prediction time $t$:
@@ -299,7 +304,7 @@ curl -X POST "http://localhost:8000/predict/batch" \
 
 ## 14. Future Development Scope
 - **Appliance Disaggregation (NILM)**: Integrating Non-Intrusive Load Monitoring to separate individual device power signatures.
-- **Probabilistic Forecasting & Uncertainty Bounds**: Implementing quantile regression (e.g. Pinball loss) or conformal prediction to output 90% confidence bands ($[\hat{y}_{lower}, \hat{y}_{upper}]$) alongside point forecasts.
+- **Probabilistic Forecasting & Uncertainty Bounds**: Implementing quantile regression (e.g. Pinball loss) or conformal prediction to output 90% confidence bands ($[\hat{y}_{\mathrm{lower}}, \hat{y}_{\mathrm{upper}}]$) alongside point forecasts.
 - **Multi-step Horizon Expansion**: Extending forecasting from 10 minutes to 1-hour, 6-hour, and 24-hour day-ahead scheduling.
 - **Edge Deployment**: Compiling the pipeline into ONNX or TinyML for direct deployment onto IoT smart meters and home gateway controllers.
 
